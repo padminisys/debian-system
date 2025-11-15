@@ -1,0 +1,37 @@
+# Build artifacts
+build/
+output/
+
+# PXE server files
+pxe/
+/srv/
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Test artifacts
+test-results/
+*.test
+
+# Credentials (if any)
+credentials.txt
+passwords.txt
+secrets/
+iso/
