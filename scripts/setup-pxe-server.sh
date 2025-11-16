@@ -52,57 +52,100 @@ check_root() {
 detect_network_interface() {
     log_step "Detecting network interface..."
     
-    # Prefer ethernet over wifi
-    local eth_iface=$(ip -br link show | grep -E "^(eth|enp|eno)" | grep "UP" | head -n1 | awk '{print $1}')
+    # Show all interfaces for debugging
+    log_info "Available interfaces with IP addresses:"
+    ip -br addr show | grep -v "127.0.0.1" | grep -E "UP.*[0-9]+\.[0-9]+" | while read line; do
+        echo "  $line"
+    done
+    echo ""
     
+    # Check for ethernet first
+    local eth_iface=$(ip -br addr show | grep -E "^(eth|enp|eno)" | grep "UP" | grep -oE "^[^ ]+" | head -n1)
+    local eth_has_ip=""
     if [ -n "$eth_iface" ]; then
-        NETWORK_INTERFACE="$eth_iface"
-        log_info "Using ethernet interface: $NETWORK_INTERFACE"
-    else
-        local wifi_iface=$(ip -br link show | grep -E "^(wlan|wlp)" | grep "UP" | head -n1 | awk '{print $1}')
-        if [ -n "$wifi_iface" ]; then
-            NETWORK_INTERFACE="$wifi_iface"
-            log_warn "Using WiFi interface: $NETWORK_INTERFACE"
-        else
-            log_error "No active network interface found"
-            exit 1
-        fi
+        eth_has_ip=$(ip -4 addr show "$eth_iface" | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1)
     fi
     
-    # Get IP address
-    SERVER_IP=$(ip -4 addr show "$NETWORK_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
+    # Check for WiFi
+    local wifi_iface=$(ip -br addr show | grep -E "^(wlan|wlp)" | grep "UP" | grep -oE "^[^ ]+" | head -n1)
+    local wifi_has_ip=""
+    if [ -n "$wifi_iface" ]; then
+        wifi_has_ip=$(ip -4 addr show "$wifi_iface" | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1)
+    fi
     
-    if [ -z "$SERVER_IP" ]; then
-        log_error "Could not determine server IP address"
+    # Prefer ethernet with IP, otherwise use WiFi
+    if [ -n "$eth_has_ip" ]; then
+        NETWORK_INTERFACE="$eth_iface"
+        SERVER_IP="$eth_has_ip"
+        log_info "✓ Using Ethernet: $NETWORK_INTERFACE"
+    elif [ -n "$wifi_has_ip" ]; then
+        NETWORK_INTERFACE="$wifi_iface"
+        SERVER_IP="$wifi_has_ip"
+        log_info "✓ Using WiFi: $NETWORK_INTERFACE"
+        log_warn "Note: WiFi PXE works fine for LAN, but ensure stable connection"
+    else
+        log_error "No network interface with IP address found"
+        log_error "Please ensure your network interface has an IP assigned"
         exit 1
     fi
     
-    log_info "Server IP: $SERVER_IP"
+    log_info "✓ Server IP: $SERVER_IP"
     
     # Calculate network range
     NETWORK_PREFIX=$(echo "$SERVER_IP" | cut -d. -f1-3)
     DHCP_RANGE_START="${NETWORK_PREFIX}.100"
     DHCP_RANGE_END="${NETWORK_PREFIX}.200"
     
-    log_info "DHCP Range: $DHCP_RANGE_START - $DHCP_RANGE_END"
+    log_info "✓ DHCP Range: $DHCP_RANGE_START - $DHCP_RANGE_END"
+    
+    # Confirmation prompt
+    echo ""
+    log_warn "PXE Server Configuration:"
+    echo "  Interface: $NETWORK_INTERFACE"
+    echo "  Server IP: $SERVER_IP"
+    echo "  DHCP Range: $DHCP_RANGE_START - $DHCP_RANGE_END"
+    echo ""
+    read -p "Continue with this configuration? (yes/no): " confirm
+    
+    if [ "$confirm" != "yes" ]; then
+        log_info "Setup cancelled by user"
+        exit 0
+    fi
 }
 
 install_dependencies() {
     log_step "Installing PXE server dependencies..."
     
-    apt update
-    apt install -y \
-        dnsmasq \
-        pxelinux \
-        syslinux-common \
-        apache2 \
-        nfs-kernel-server \
-        bsdtar
+    # Update package list
+    if apt update 2>&1 | grep -q "Failed"; then
+        log_warn "Some package sources failed, continuing with available sources"
+    fi
+    
+    # Install dependencies
+    local packages=(
+        "dnsmasq"
+        "pxelinux"
+        "syslinux-common"
+        "apache2"
+        "nfs-kernel-server"
+        "libarchive-tools"
+        "rsync"
+        "curl"
+    )
+    
+    log_info "Installing: ${packages[*]}"
+    
+    if apt install -y "${packages[@]}"; then
+        log_info "✓ Dependencies installed successfully"
+    else
+        log_error "Failed to install some dependencies"
+        exit 1
+    fi
     
     # Stop services for configuration
-    systemctl stop dnsmasq apache2 nfs-server || true
+    systemctl stop dnsmasq apache2 nfs-server 2>/dev/null || true
     
-    log_info "Dependencies installed"
+    log_info "✓ Services stopped for configuration"
 }
 
 setup_tftp_structure() {
@@ -157,17 +200,17 @@ LABEL auto-install
     MENU LABEL ^1. Automated Btrfs Installation
     MENU DEFAULT
     KERNEL debian-installer/vmlinuz
-    APPEND initrd=debian-installer/initrd.gz auto=true priority=critical url=http://${SERVER_IP}/preseed.cfg netcfg/choose_interface=${NETWORK_INTERFACE} quiet splash ---
+    APPEND initrd=debian-installer/initrd.gz auto=true priority=critical preseed/url=http://${SERVER_IP}/preseed.cfg netcfg/choose_interface=auto ---
 
 LABEL manual
     MENU LABEL ^2. Manual Installation
     KERNEL debian-installer/vmlinuz
-    APPEND initrd=debian-installer/initrd.gz quiet ---
+    APPEND initrd=debian-installer/initrd.gz ---
 
 LABEL rescue
     MENU LABEL ^3. Rescue Mode
     KERNEL debian-installer/vmlinuz
-    APPEND initrd=debian-installer/initrd.gz rescue/enable=true quiet ---
+    APPEND initrd=debian-installer/initrd.gz rescue/enable=true ---
 
 LABEL local
     MENU LABEL ^4. Boot from Local Disk
@@ -185,8 +228,20 @@ setup_http_server() {
     # Copy preseed file
     cp "$PRESEED_FILE" "$HTTP_ROOT/preseed.cfg"
     
-    # Modify preseed to use NFS for installation
-    sed -i "s|d-i mirror/http/hostname string deb.debian.org|d-i mirror/protocol string nfs\nd-i mirror/nfs/server string ${SERVER_IP}\nd-i mirror/nfs/directory string /srv/nfs/debian|" "$HTTP_ROOT/preseed.cfg"
+    # Modify preseed to use local NFS mount for installation
+    sed -i '/d-i mirror\/http\/hostname/d' "$HTTP_ROOT/preseed.cfg"
+    sed -i '/d-i mirror\/http\/directory/d' "$HTTP_ROOT/preseed.cfg"
+    sed -i '/d-i mirror\/http\/proxy/d' "$HTTP_ROOT/preseed.cfg"
+    
+    # Add NFS mount configuration after mirror section
+    sed -i '/### Mirror/a\
+d-i mirror/protocol string file\
+d-i mirror/country string manual\
+d-i mirror/file/hostname string\
+d-i mirror/file/directory string /media/cdrom\
+d-i apt-setup/cdrom/set-first boolean false\
+d-i apt-setup/cdrom/set-next boolean false\
+d-i apt-setup/cdrom/set-failed boolean false' "$HTTP_ROOT/preseed.cfg"
     
     # Configure Apache
     cat > /etc/apache2/sites-available/pxe.conf << EOF

@@ -146,7 +146,11 @@ extract_iso() {
 embed_preseed() {
     log_info "Embedding preseed configuration..."
     
+    # Copy preseed to root of ISO
     cp "$PRESEED_FILE" "$BUILD_DIR/iso-extract/preseed.cfg"
+    
+    # Also copy to install.amd directory for better accessibility
+    cp "$PRESEED_FILE" "$BUILD_DIR/iso-extract/install.amd/preseed.cfg"
     
     log_info "Preseed embedded successfully"
 }
@@ -168,17 +172,17 @@ prompt 0
 label auto-install
     menu label ^Automated Btrfs Installation
     kernel /install.amd/vmlinuz
-    append auto=true priority=critical vga=788 initrd=/install.amd/initrd.gz preseed/file=/cdrom/preseed.cfg quiet splash ---
+    append auto=true priority=critical initrd=/install.amd/initrd.gz preseed/file=/cdrom/preseed.cfg ---
 
 label manual
     menu label ^Manual Installation
     kernel /install.amd/vmlinuz
-    append vga=788 initrd=/install.amd/initrd.gz --- quiet
+    append initrd=/install.amd/initrd.gz ---
 
 label rescue
     menu label ^Rescue Mode
     kernel /install.amd/vmlinuz
-    append vga=788 initrd=/install.amd/initrd.gz rescue/enable=true --- quiet
+    append initrd=/install.amd/initrd.gz rescue/enable=true ---
 EOF
     
     log_info "ISOLINUX configured for automated installation"
@@ -201,19 +205,19 @@ set timeout=5
 
 menuentry "Automated Btrfs Installation" {
     set gfxpayload=keep
-    linux   /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/preseed.cfg quiet splash ---
+    linux   /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/preseed.cfg ---
     initrd  /install.amd/initrd.gz
 }
 
 menuentry "Manual Installation" {
     set gfxpayload=keep
-    linux   /install.amd/vmlinuz quiet ---
+    linux   /install.amd/vmlinuz ---
     initrd  /install.amd/initrd.gz
 }
 
 menuentry "Rescue Mode" {
     set gfxpayload=keep
-    linux   /install.amd/vmlinuz rescue/enable=true quiet ---
+    linux   /install.amd/vmlinuz rescue/enable=true ---
     initrd  /install.amd/initrd.gz
 }
 EOF
