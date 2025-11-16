@@ -36,21 +36,62 @@ log_error() {
 
 check_dependencies() {
     log_info "Checking dependencies..."
-    local missing_deps=()
+    local missing_pkgs=()
+    local required_packages=(
+        "xorriso:xorriso"
+        "bsdtar:libarchive-tools"
+        "genisoimage:genisoimage"
+        "isolinux:isolinux"
+        "syslinux:syslinux-utils"
+        "isohybrid:syslinux-utils"
+    )
     
-    for cmd in xorriso bsdtar genisoimage isolinux; do
-        if ! command -v $cmd &> /dev/null; then
-            missing_deps+=($cmd)
+    # Check each command and map to package
+    for entry in "${required_packages[@]}"; do
+        local cmd="${entry%%:*}"
+        local pkg="${entry##*:}"
+        
+        if ! command -v "$cmd" &> /dev/null; then
+            if [[ ! " ${missing_pkgs[@]} " =~ " ${pkg} " ]]; then
+                missing_pkgs+=("$pkg")
+            fi
         fi
     done
     
-    if [ ${#missing_deps[@]} -ne 0 ]; then
-        log_error "Missing dependencies: ${missing_deps[*]}"
+    # Check for required files
+    if [ ! -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]; then
+        if [[ ! " ${missing_pkgs[@]} " =~ " isolinux " ]]; then
+            missing_pkgs+=("isolinux")
+        fi
+    fi
+    
+    if [ ${#missing_pkgs[@]} -ne 0 ]; then
+        log_warn "Missing packages: ${missing_pkgs[*]}"
         log_info "Installing dependencies..."
-        sudo apt update
-        sudo apt install -y xorriso libarchive-tools genisoimage isolinux syslinux-utils
+        
+        # Update package list
+        if ! sudo apt update 2>&1 | grep -q "Failed"; then
+            log_info "Package list updated successfully"
+        else
+            log_warn "Some package sources failed, continuing with available sources"
+        fi
+        
+        # Install missing packages
+        if sudo apt install -y "${missing_pkgs[@]}"; then
+            log_info "All dependencies installed successfully"
+        else
+            log_error "Failed to install some dependencies"
+            exit 1
+        fi
     else
-        log_info "All dependencies satisfied"
+        log_info "✓ All dependencies satisfied"
+    fi
+    
+    # Verify critical files exist
+    if [ ! -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]; then
+        log_error "Critical file missing: /usr/lib/ISOLINUX/isohdpfx.bin"
+        log_error "Try: sudo apt install --reinstall isolinux"
+        exit 1
     fi
 }
 
@@ -196,10 +237,12 @@ update_md5sums() {
 
 build_iso() {
     log_info "Building custom ISO..."
+    log_info "This may take several minutes, please wait..."
     
     cd "$BUILD_DIR"
     
-    xorriso -as mkisofs \
+    # Build ISO with error suppression for warnings
+    if xorriso -as mkisofs \
         -r -V "Debian 12.12 Btrfs Auto" \
         -o "$OUTPUT_ISO" \
         -J -joliet-long \
@@ -213,9 +256,12 @@ build_iso() {
         -e boot/grub/efi.img \
         -no-emul-boot \
         -isohybrid-gpt-basdat \
-        iso-extract/
-    
-    log_info "ISO build complete"
+        iso-extract/ 2>&1 | grep -v "WARNING" | grep -v "NOTE"; then
+        log_info "✓ ISO build complete"
+    else
+        log_error "ISO build failed"
+        exit 1
+    fi
 }
 
 verify_output() {
@@ -227,9 +273,31 @@ verify_output() {
     fi
     
     local iso_size=$(stat -f%z "$OUTPUT_ISO" 2>/dev/null || stat -c%s "$OUTPUT_ISO" 2>/dev/null)
-    log_info "Output ISO: $(basename $OUTPUT_ISO)"
-    log_info "Size: $(numfmt --to=iec-i --suffix=B $iso_size)"
-    log_info "Location: $OUTPUT_ISO"
+    
+    # Verify ISO is bootable
+    if file "$OUTPUT_ISO" | grep -q "ISO 9660"; then
+        log_info "✓ ISO format verified"
+    else
+        log_error "Output file is not a valid ISO"
+        exit 1
+    fi
+    
+    # Check minimum size (should be > 100MB)
+    if [ "$iso_size" -lt 104857600 ]; then
+        log_error "ISO size too small, build may have failed"
+        exit 1
+    fi
+    
+    log_info "✓ Output ISO: $(basename $OUTPUT_ISO)"
+    log_info "✓ Size: $(numfmt --to=iec-i --suffix=B $iso_size)"
+    log_info "✓ Location: $OUTPUT_ISO"
+    
+    # Verify preseed is embedded
+    if bsdtar -tf "$OUTPUT_ISO" | grep -q "preseed.cfg"; then
+        log_info "✓ Preseed configuration embedded"
+    else
+        log_warn "Preseed configuration not found in ISO"
+    fi
 }
 
 cleanup() {
