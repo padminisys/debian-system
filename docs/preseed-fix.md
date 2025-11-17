@@ -43,15 +43,24 @@ sudo ./scripts/setup-pxe-server.sh
 ```
 
 **Features:**
-- Automatic DHCP configuration
+- **Proxy DHCP mode** (Router assigns IPs, PXE server provides boot info only)
 - TFTP boot files
 - HTTP preseed delivery
+- NFS installation files
 - Uses: `preseed/pxe/btrfs-automated.cfg`
+
+**How It Works:**
+1. Router DHCP assigns IP to target machine
+2. dnsmasq (Proxy DHCP) adds PXE boot information
+3. Target downloads boot files via TFTP
+4. Preseed downloaded via HTTP
 
 **Stop PXE Server:**
 ```bash
 sudo ./scripts/stop-pxe-server.sh
 ```
+
+**Note:** Router continues to provide DHCP/IP addresses. PXE server only provides boot information.
 
 ### Method 2: USB/ISO Boot
 

@@ -91,19 +91,12 @@ detect_network_interface() {
     
     log_info "✓ Server IP: $SERVER_IP"
     
-    # Calculate network range
-    NETWORK_PREFIX=$(echo "$SERVER_IP" | cut -d. -f1-3)
-    DHCP_RANGE_START="${NETWORK_PREFIX}.100"
-    DHCP_RANGE_END="${NETWORK_PREFIX}.200"
-    
-    log_info "✓ DHCP Range: $DHCP_RANGE_START - $DHCP_RANGE_END"
-    
     # Confirmation prompt
     echo ""
-    log_warn "PXE Server Configuration:"
+    log_warn "PXE Server Configuration (Proxy DHCP Mode):"
     echo "  Interface: $NETWORK_INTERFACE"
     echo "  Server IP: $SERVER_IP"
-    echo "  DHCP Range: $DHCP_RANGE_START - $DHCP_RANGE_END"
+    echo "  Mode: Proxy DHCP (Router assigns IPs, PXE server provides boot info)"
     echo ""
     read -p "Continue with this configuration? (yes/no): " confirm
     
@@ -275,41 +268,44 @@ EOF
 }
 
 configure_dnsmasq() {
-    log_step "Configuring dnsmasq (DHCP + TFTP)..."
+    log_step "Configuring dnsmasq (Proxy DHCP + TFTP)..."
     
     # Backup original config
-    cp /etc/dnsmasq.conf /etc/dnsmasq.conf.backup
+    cp /etc/dnsmasq.conf /etc/dnsmasq.conf.backup 2>/dev/null || true
     
     cat > /etc/dnsmasq.conf << EOF
-# PXE Server Configuration for Debian Btrfs Installation
+# PXE Server Configuration - Proxy DHCP Mode
+# Router provides IP addresses, dnsmasq only provides PXE boot info
 
 # Interface to listen on
 interface=${NETWORK_INTERFACE}
 bind-interfaces
 
-# DHCP Configuration
-dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},12h
-dhcp-option=3,${SERVER_IP}
-dhcp-option=6,${SERVER_IP}
+# Proxy DHCP - Do NOT assign IP addresses
+# Router DHCP handles IP assignment
+dhcp-range=${SERVER_IP},proxy
 
 # PXE Boot Configuration
-dhcp-boot=pxelinux.0
+dhcp-boot=pxelinux.0,${SERVER_IP},${SERVER_IP}
+
+# Alternative: Use pxe-service for more explicit PXE
+pxe-service=x86PC,"Network Boot",pxelinux
 
 # TFTP Configuration
 enable-tftp
 tftp-root=${TFTP_ROOT}
+tftp-secure
 
 # Logging
 log-dhcp
 log-queries
 
-# DNS
-no-resolv
-server=8.8.8.8
-server=8.8.4.4
+# Do not provide DNS service
+port=0
 EOF
     
-    log_info "dnsmasq configured"
+    log_info "dnsmasq configured in Proxy DHCP mode"
+    log_info "Router will assign IP addresses, dnsmasq only provides PXE boot info"
 }
 
 start_services() {
@@ -379,7 +375,7 @@ print_summary() {
     echo "Server Configuration:"
     echo "  Interface:    $NETWORK_INTERFACE"
     echo "  Server IP:    $SERVER_IP"
-    echo "  DHCP Range:   $DHCP_RANGE_START - $DHCP_RANGE_END"
+    echo "  Mode:         Proxy DHCP (Router provides IPs)"
     echo ""
     echo "Services Running:"
     echo "  TFTP:         $TFTP_ROOT"

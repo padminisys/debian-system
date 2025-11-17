@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stop PXE Server Services
-# Stops dnsmasq, Apache2, and NFS services used for PXE boot
+# Stops dnsmasq (Proxy DHCP + TFTP), Apache2 (HTTP), and NFS services
+# Note: Router continues to provide DHCP/IP addresses
 
 # Removed set -e to allow script to continue if services aren't running
 
@@ -77,13 +78,16 @@ verify_stopped() {
 cleanup_ports() {
     log_info "Checking for processes on PXE ports..."
     
-    # Check common PXE ports
-    local ports=(67 69 80 2049 111)
+    # Check PXE-specific ports (not DHCP 67 since router handles that)
+    local ports=(69 80 2049 111)
+    local port_names=("TFTP" "HTTP" "NFS" "RPC")
     local found=0
     
-    for port in "${ports[@]}"; do
+    for i in "${!ports[@]}"; do
+        local port="${ports[$i]}"
+        local name="${port_names[$i]}"
         if lsof -i ":$port" &>/dev/null; then
-            log_warn "Port $port still in use:"
+            log_warn "Port $port ($name) still in use:"
             lsof -i ":$port" | tail -n +2
             ((found++))
         fi
@@ -101,9 +105,11 @@ print_summary() {
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     echo "Stopped Services:"
-    echo "  • dnsmasq (DHCP + TFTP)"
-    echo "  • apache2 (HTTP)"
-    echo "  • nfs-server (NFS)"
+    echo "  • dnsmasq (Proxy DHCP + TFTP)"
+    echo "  • apache2 (HTTP - preseed files)"
+    echo "  • nfs-server (NFS - installation files)"
+    echo ""
+    echo "Note: Router DHCP continues to assign IP addresses"
     echo ""
     echo "To restart PXE server:"
     echo "  sudo ./scripts/setup-pxe-server.sh"
