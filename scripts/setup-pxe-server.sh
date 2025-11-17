@@ -16,7 +16,7 @@ HTTP_ROOT="/srv/http"
 NFS_ROOT="/srv/nfs"
 
 SOURCE_ISO="$ISO_DIR/debian-12.12.0-amd64-DVD-1.iso"
-PRESEED_FILE="$PRESEED_DIR/btrfs-automated.cfg"
+PRESEED_FILE="$PRESEED_DIR/pxe/btrfs-automated.cfg"
 
 # Colors
 RED='\033[0;31m'

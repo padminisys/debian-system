@@ -1,73 +1,139 @@
-# Preseed File Syntax Fix
+# Preseed Configuration Guide
 
-## Issue
-The Debian installer was failing with error:
+## Overview
+
+This project maintains **two separate preseed configurations** optimized for different installation methods:
+
+1. **PXE Network Boot** - [`preseed/pxe/btrfs-automated.cfg`](../preseed/pxe/btrfs-automated.cfg)
+2. **ISO/USB Boot** - [`preseed/iso/btrfs-automated.cfg`](../preseed/iso/btrfs-automated.cfg)
+
+## Why Two Versions?
+
+The preseed files require **different shell script syntax** depending on how they're delivered:
+
+### PXE Version (HTTP-served)
+- Uses **standard shell syntax**
+- AWK: `awk {print\ \$1}`
+- Heredocs: `<< EOF`
+- Served via HTTP, parsed directly by installer
+
+### ISO Version (Embedded)
+- Uses **escaped shell syntax**
+- AWK: `awk '"'"'{print $1}'"'"'`
+- Heredocs: `<< '"'"'EOF'"'"'`
+- Embedded in ISO, requires extra escaping for preseed parser
+
+## Directory Structure
+
 ```
-Failed to process the preconfiguration file
-The installer failed to process the preconfiguration file from file:///cdrom/preseed.cfg. 
-The file may be corrupt.
+preseed/
+├── pxe/
+│   └── btrfs-automated.cfg    # For PXE network boot
+└── iso/
+    └── btrfs-automated.cfg    # For ISO/USB installation
 ```
 
-## Root Cause
-The preseed file contained **shell script syntax errors** in the `late_command` section:
+## Installation Methods
 
-1. **Incorrect awk syntax**: `awk "{print \$1}"` - The braces were escaped incorrectly
-2. **Heredoc quoting issues**: Heredoc delimiters like `<< "EOF"` need special escaping when embedded in preseed
+### Method 1: PXE Network Boot
 
-## Fixes Applied
-
-### 1. AWK Command Syntax (Lines 127, 280)
-**Before:**
+**Setup PXE Server:**
 ```bash
-ROOT_DEV=$(mount | grep "on /target " | awk "{print \$1}")
+sudo ./scripts/setup-pxe-server.sh
 ```
 
-**After:**
+**Features:**
+- Automatic DHCP configuration
+- TFTP boot files
+- HTTP preseed delivery
+- Uses: `preseed/pxe/btrfs-automated.cfg`
+
+**Stop PXE Server:**
+```bash
+sudo ./scripts/stop-pxe-server.sh
+```
+
+### Method 2: USB/ISO Boot
+
+**Build Custom ISO:**
+```bash
+./scripts/build-custom-iso.sh
+```
+
+**Flash to USB:**
+```bash
+sudo dd if=output/debian-12.12-btrfs-automated.iso of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+**Features:**
+- Bootable USB/DVD
+- Embedded preseed
+- Works offline
+- Uses: `preseed/iso/btrfs-automated.cfg`
+
+## Technical Details
+
+### Shell Script Escaping
+
+**PXE Version (Standard):**
+```bash
+ROOT_DEV=$(mount | grep "on /target " | awk {print\ \$1})
+cat > /target/etc/fstab << EOF
+```
+
+**ISO Version (Escaped):**
 ```bash
 ROOT_DEV=$(mount | grep "on /target " | awk '"'"'{print $1}'"'"')
-```
-
-### 2. Heredoc Delimiters (Multiple locations)
-**Before:**
-```bash
-cat > /target/etc/fstab << "EOF"
-```
-
-**After:**
-```bash
 cat > /target/etc/fstab << '"'"'EOF'"'"'
 ```
 
-## Technical Explanation
+### Why Different Escaping?
 
-When embedding shell scripts in preseed files, special quoting is required because:
-- The preseed parser processes the entire `late_command` as a single string
-- Shell metacharacters need proper escaping to survive the preseed parser
-- The pattern `'"'"'` effectively breaks out of single quotes, adds a single quote, and re-enters single quotes
+- **ISO**: Preseed parser processes the entire `late_command` as a string, requiring double-escaping
+- **PXE**: HTTP-served file is parsed directly, standard shell syntax works
 
 ## Verification
 
-The corrected preseed file has been:
-1. ✅ Syntax validated
-2. ✅ Embedded in new ISO: `debian-12.12-btrfs-automated.iso`
-3. ✅ Ready for USB installation
+**Check PXE preseed:**
+```bash
+curl http://192.168.2.8/preseed.cfg | grep "ROOT_DEV="
+```
 
-## Next Steps
+**Check ISO preseed:**
+```bash
+bsdtar -xOf output/debian-12.12-btrfs-automated.iso preseed.cfg | grep "ROOT_DEV="
+```
 
-1. **Flash the corrected ISO to USB:**
-   ```bash
-   sudo dd if=output/debian-12.12-btrfs-automated.iso of=/dev/sdX bs=4M status=progress conv=fsync
-   ```
+## Default Credentials
 
-2. **Boot and test** - The installation should now proceed without preseed errors
+Both configurations use the same credentials:
+- **Root:** `SecureRoot2024!`
+- **User:** `sysadmin` / `Admin2024!Secure`
 
-3. **Verify post-installation** - After successful install, check:
-   ```bash
-   system-info
-   btrfs subvolume list /
-   snapper list
-   ```
+## Post-Installation
+
+After successful installation:
+```bash
+system-info              # Display system details
+btrfs subvolume list /   # List Btrfs subvolumes
+snapper list             # List snapshots
+```
+
+## Troubleshooting
+
+### PXE Installation Fails
+1. Verify preseed is accessible: `curl http://SERVER_IP/preseed.cfg`
+2. Check DHCP assignment on target machine
+3. Ensure correct preseed syntax (no escaped quotes for PXE)
+
+### ISO Installation Fails
+1. Verify ISO was built with correct preseed
+2. Check preseed has escaped syntax for embedded use
+3. Rebuild ISO if needed: `./scripts/build-custom-iso.sh`
 
 ## Files Modified
-- [`preseed/btrfs-automated.cfg`](../preseed/btrfs-automated.cfg) - Fixed shell syntax errors
-- ISO rebuilt: `output/debian-12.12-btrfs-automated.iso`
+
+- [`preseed/pxe/btrfs-automated.cfg`](../preseed/pxe/btrfs-automated.cfg) - PXE network boot
+- [`preseed/iso/btrfs-automated.cfg`](../preseed/iso/btrfs-automated.cfg) - ISO/USB boot
+- [`scripts/build-custom-iso.sh`](../scripts/build-custom-iso.sh) - Uses ISO preseed
+- [`scripts/setup-pxe-server.sh`](../scripts/setup-pxe-server.sh) - Uses PXE preseed
