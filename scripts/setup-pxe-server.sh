@@ -308,7 +308,7 @@ EOF
 }
 
 setup_http_server() {
-    log_step "Setting up HTTP server for preseed..."
+    log_step "Setting up HTTP server for preseed and post-install scripts..."
     
     mkdir -p "$HTTP_ROOT"
     
@@ -328,6 +328,23 @@ setup_http_server() {
         exit 1
     fi
     log_success "Preseed file copied to HTTP root"
+    
+    # Copy post-install Btrfs setup script
+    local POSTINSTALL_SCRIPT="$PROJECT_ROOT/srv/http/postinstall-btrfs.sh"
+    if [ ! -f "$POSTINSTALL_SCRIPT" ]; then
+        log_fail "Post-install script not found: $POSTINSTALL_SCRIPT"
+        exit 1
+    fi
+    
+    cp "$POSTINSTALL_SCRIPT" "$HTTP_ROOT/postinstall-btrfs.sh"
+    chmod +x "$HTTP_ROOT/postinstall-btrfs.sh"
+    
+    # Verify post-install script was copied
+    if [ ! -f "$HTTP_ROOT/postinstall-btrfs.sh" ]; then
+        log_fail "Post-install script not copied to HTTP root"
+        exit 1
+    fi
+    log_success "Post-install script deployed and made executable"
     
     # Verify preseed has CD-ROM skip directives
     if ! grep -q "apt-setup/cdrom/set-first" "$HTTP_ROOT/preseed.cfg"; then
@@ -507,6 +524,21 @@ verify_setup() {
         fi
     fi
     
+    # Check post-install script accessibility
+    if ! curl -s "http://localhost/postinstall-btrfs.sh" > /dev/null; then
+        log_fail "HTTP post-install script not accessible"
+        ((errors++))
+    else
+        log_success "Post-install script accessible"
+        
+        # Test from server IP
+        if curl -s "http://${SERVER_IP}/postinstall-btrfs.sh" > /dev/null; then
+            log_success "Post-install script accessible via server IP"
+        else
+            log_warn "Post-install script not accessible via server IP (may be firewall)"
+        fi
+    fi
+    
     echo ""
     log_info "=== Service Verification ==="
     
@@ -559,6 +591,7 @@ print_summary() {
     echo "Services Running:"
     echo "  TFTP:         $TFTP_ROOT (boot files)"
     echo "  HTTP:         http://$SERVER_IP/preseed.cfg"
+    echo "  Post-Install: http://$SERVER_IP/postinstall-btrfs.sh"
     echo ""
     echo -e "${GREEN}CD-ROM Detection Fix Applied:${NC}"
     echo "  ✓ hw-detect/load_media=false in boot parameters"
@@ -595,6 +628,7 @@ print_summary() {
     echo ""
     echo "Testing:"
     echo "  curl http://$SERVER_IP/preseed.cfg"
+    echo "  curl http://$SERVER_IP/postinstall-btrfs.sh"
     echo "  systemctl status dnsmasq apache2"
     echo ""
     echo -e "${YELLOW}Log file: $LOG_FILE${NC}"

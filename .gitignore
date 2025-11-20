@@ -3,8 +3,6 @@ build/
 output/
 
 # PXE server files
-pxe/
-/srv/
 
 # Temporary files
 *.tmp
