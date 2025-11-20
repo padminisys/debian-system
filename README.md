@@ -15,11 +15,17 @@ Complete automated installation system for Debian 12.12 with Btrfs filesystem, S
 ## 📋 Prerequisites
 
 - Debian-based system for building ISO/PXE server
-- Debian 12.12 DVD ISO (placed in [`iso/`](iso/) directory)
+- **Debian 12.12 netinst ISO** (placed in [`iso/`](iso/) directory)
+  - Download: `debian-12.12.0-amd64-netinst.iso` (~400MB)
+  - For USB: Can also use DVD ISO (~4.7GB)
 - 8GB+ USB drive (for USB installation)
-- Network infrastructure (for PXE installation)
+- Network infrastructure with internet access (for PXE installation)
 
 ## 🚀 Quick Start
+
+### 🚨 PXE Installation Issues?
+
+If you're getting `couldn't mount installation media` error, see **[QUICK-FIX.md](QUICK-FIX.md)** for immediate solution.
 
 ### Option 1: USB Installation
 
@@ -37,24 +43,38 @@ sudo ./scripts/flash-usb.sh
 ### Option 2: PXE Network Installation
 
 ```bash
-# 1. Setup PXE server
+# 1. Setup PXE server (uses netinst ISO)
 sudo ./scripts/setup-pxe-server.sh
 
-# 2. Boot client machine from network
-# Installation completes automatically in 5-10 minutes
+# 2. Verify configuration (recommended)
+sudo ./scripts/verify-pxe-config.sh
+
+# 3. Boot client machine from network
+# 4. Ensure client has internet access
+# Installation completes automatically in 10-15 minutes
 ```
+
+**Note:** PXE installation requires internet connectivity to download packages from Debian mirrors.
+
+**Having Issues?** See [QUICK-FIX.md](QUICK-FIX.md) for complete reset and rebuild workflow.
 
 ## 📁 Project Structure
 
 ```
 debian-system/
 ├── iso/                          # Source ISO location
-│   └── debian-12.12.0-amd64-DVD-1.iso
+│   ├── debian-12.12.0-amd64-netinst.iso  # For PXE (required)
+│   └── debian-12.12.0-amd64-DVD-1.iso    # For USB (optional)
 ├── preseed/                      # Preseed configurations
-│   └── btrfs-automated.cfg       # Main preseed file
+│   ├── pxe/
+│   │   └── btrfs-automated.cfg   # PXE preseed
+│   └── iso/
+│       └── btrfs-automated.cfg   # ISO preseed
 ├── scripts/                      # Automation scripts
 │   ├── build-custom-iso.sh       # Build bootable ISO
-│   ├── setup-pxe-server.sh       # Setup PXE server
+│   ├── setup-pxe-server.sh       # Setup PXE server (with validation)
+│   ├── reset-pxe-server.sh       # Complete PXE server reset
+│   ├── verify-pxe-config.sh      # Verify PXE configuration
 │   ├── flash-usb.sh              # Flash ISO to USB
 │   └── test-installation.sh      # Validate installation
 ├── build/                        # Build artifacts (auto-created)
@@ -230,7 +250,8 @@ sudo update-grub
 ### Installation Time
 
 - **USB Boot**: 5-10 minutes (depends on hardware)
-- **PXE Boot**: 5-10 minutes (depends on network speed)
+- **PXE Boot**: 10-15 minutes (depends on internet speed)
+  - Uses netinst method: downloads packages during installation
 
 ### Snapshot Operations
 
@@ -291,17 +312,35 @@ df -h
 
 ### PXE Boot Issues
 
+**"Couldn't mount installation media" error:**
+
+This error occurs when the Debian installer tries to detect CD-ROM before network configuration.
+
+**🚨 IMMEDIATE FIX:** See [QUICK-FIX.md](QUICK-FIX.md)
+
+**Complete Solution:**
 ```bash
-# Check services
-sudo systemctl status dnsmasq apache2 nfs-server
+# 1. Complete reset
+sudo ./scripts/reset-pxe-server.sh
 
-# Verify network
-ip addr show
-curl http://localhost/preseed.cfg
+# 2. Fresh setup with CD-ROM fix
+sudo ./scripts/setup-pxe-server.sh
 
-# Check firewall
-sudo ufw status
+# 3. Verify configuration
+sudo ./scripts/verify-pxe-config.sh
 ```
+
+The setup script now **GUARANTEES** the CD-ROM detection fix (`hw-detect/load_media=false`) is applied and verified.
+
+**Detailed Documentation:**
+- [QUICK-FIX.md](QUICK-FIX.md) - Immediate 3-command solution
+- [docs/pxe-server-reset-guide.md](docs/pxe-server-reset-guide.md) - Complete guide with troubleshooting
+
+**Common Issues:**
+- CD-ROM detection not disabled (fixed by new scripts)
+- No internet connectivity on client machine
+- Firewall blocking HTTP/TFTP ports
+- Services not running properly (verified by scripts)
 
 ### Installation Hangs
 
@@ -371,9 +410,10 @@ This project is provided as-is for automated Debian installation with Btrfs.
 
 1. Client requests IP via DHCP
 2. DHCP server provides IP + boot file location
-3. Client downloads boot files via TFTP
+3. Client downloads boot files via TFTP (kernel/initrd from netinst)
 4. Kernel boots and fetches preseed via HTTP
-5. Installation proceeds automatically
+5. Installer downloads packages from deb.debian.org
+6. Installation proceeds automatically
 
 ## 🚀 Production Deployment
 
