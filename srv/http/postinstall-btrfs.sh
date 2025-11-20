@@ -9,13 +9,13 @@ echo "=== [$(date)] Starting Btrfs Post-Installation Setup ==="
 
 # Detect root device and UUID
 ROOT_DEV=$(mount | grep "on / " | awk '{print $1}')
-BTRFS_UUID=$(blkid -s UUID -o value $ROOT_DEV)
+BTRFS_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
 echo "Root device: $ROOT_DEV"
 echo "Btrfs UUID: $BTRFS_UUID"
 
-# Mount Btrfs root
+# Mount Btrfs root (top-level)
 mkdir -p /mnt/btrfs-root
-mount -t btrfs $ROOT_DEV /mnt/btrfs-root
+mount -t btrfs "$ROOT_DEV" /mnt/btrfs-root
 
 echo "Creating Btrfs subvolumes..."
 cd /mnt/btrfs-root
@@ -23,7 +23,9 @@ cd /mnt/btrfs-root
 # Create @ subvolume and copy root filesystem
 btrfs subvolume create @
 echo "Copying root filesystem to @ subvolume..."
-rsync -aAXHv --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} / /mnt/btrfs-root/@/
+rsync -aAXHv \
+  --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} \
+  / /mnt/btrfs-root/@/
 
 # Create additional subvolumes
 btrfs subvolume create @home
@@ -46,23 +48,23 @@ umount /mnt/btrfs-root
 umount /boot/efi || true
 umount /boot || true
 
-mount -o subvol=@,compress=zstd:1,noatime $ROOT_DEV /mnt
+mount -o subvol=@,compress=zstd:1,noatime "$ROOT_DEV" /mnt
 mkdir -p /mnt/{home,var/log,.snapshots,tmp}
-mount -o subvol=@home,compress=zstd:1,noatime $ROOT_DEV /mnt/home
-mount -o subvol=@var_log,compress=zstd:1,noatime $ROOT_DEV /mnt/var/log
-mount -o subvol=@snapshots,noatime $ROOT_DEV /mnt/.snapshots
-mount -o subvol=@tmp,compress=zstd:1,noatime $ROOT_DEV /mnt/tmp
+mount -o subvol=@home,compress=zstd:1,noatime "$ROOT_DEV" /mnt/home
+mount -o subvol=@var_log,compress=zstd:1,noatime "$ROOT_DEV" /mnt/var/log
+mount -o subvol=@snapshots,noatime "$ROOT_DEV" /mnt/.snapshots
+mount -o subvol=@tmp,compress=zstd:1,noatime "$ROOT_DEV" /mnt/tmp
 
 # Remount boot partitions
 BOOT_DEV=$(blkid | grep -E 'LABEL="boot"' | cut -d: -f1 || echo "")
 if [ -n "$BOOT_DEV" ]; then
-    mount $BOOT_DEV /mnt/boot
+    mount "$BOOT_DEV" /mnt/boot
 fi
 
 EFI_DEV=$(blkid | grep -E 'TYPE="vfat"' | head -n1 | cut -d: -f1 || echo "")
 if [ -n "$EFI_DEV" ]; then
     mkdir -p /mnt/boot/efi
-    mount $EFI_DEV /mnt/boot/efi
+    mount "$EFI_DEV" /mnt/boot/efi
 fi
 
 # Generate fstab
@@ -77,29 +79,37 @@ UUID=$BTRFS_UUID  /tmp         btrfs  defaults,subvol=@tmp,compress=zstd:1,noati
 EOF
 
 if [ -n "$BOOT_DEV" ]; then
-    BOOT_UUID=$(blkid -s UUID -o value $BOOT_DEV)
+    BOOT_UUID=$(blkid -s UUID -o value "$BOOT_DEV")
     echo "UUID=$BOOT_UUID  /boot  ext4  defaults  0  2" >> /mnt/etc/fstab
 fi
 
 if [ -n "$EFI_DEV" ]; then
-    EFI_UUID=$(blkid -s UUID -o value $EFI_DEV)
+    EFI_UUID=$(blkid -s UUID -o value "$EFI_DEV")
     echo "UUID=$EFI_UUID  /boot/efi  vfat  umask=0077  0  1" >> /mnt/etc/fstab
 fi
 
 SWAP_DEV=$(blkid | grep -E 'TYPE="swap"' | cut -d: -f1 || echo "")
 if [ -n "$SWAP_DEV" ]; then
-    SWAP_UUID=$(blkid -s UUID -o value $SWAP_DEV)
+    SWAP_UUID=$(blkid -s UUID -o value "$SWAP_DEV")
     echo "UUID=$SWAP_UUID  none  swap  sw  0  0" >> /mnt/etc/fstab
 fi
 
 # Configure Snapper
 echo "Configuring Snapper..."
-chroot /mnt snapper -c root create-config /
+# This may fail in installer environment due to missing D-Bus; do NOT abort.
+if chroot /mnt snapper -c root create-config /; then
+    echo "snapper create-config completed."
+else
+    echo "snapper create-config failed (likely D-Bus not available); continuing..."
+fi
 
+# Replace /.snapshots with our @snapshots subvolume
 chroot /mnt btrfs subvolume delete /.snapshots 2>/dev/null || true
 mkdir -p /mnt/.snapshots
-mount -o subvol=@snapshots,noatime $ROOT_DEV /mnt/.snapshots
+mount -o subvol=@snapshots,noatime "$ROOT_DEV" /mnt/.snapshots
 
+# Overwrite Snapper root config with our tuned settings
+mkdir -p /mnt/etc/snapper/configs
 cat > /mnt/etc/snapper/configs/root << 'SNAPEOF'
 SUBVOLUME="/"
 FSTYPE="btrfs"
@@ -126,6 +136,7 @@ EMPTY_PRE_POST_MIN_AGE="1800"
 SNAPEOF
 
 chroot /mnt chmod 750 /.snapshots
+
 # Only enable grub-btrfsd if the service exists (for future use if you add it)
 if chroot /mnt systemctl list-unit-files | grep -q '^grub-btrfsd\.service'; then
     chroot /mnt systemctl enable grub-btrfsd.service
@@ -221,18 +232,30 @@ chmod 440 /mnt/etc/sudoers.d/sysadmin
 # Enable SSH root login
 sed -i "s/#PermitRootLogin prohibit-password/PermitRootLogin yes/" /mnt/etc/ssh/sshd_config
 
-# Configure firewall
-chroot /mnt ufw allow 22/tcp
-chroot /mnt ufw --force enable
+# Configure firewall (non-fatal in installer environment)
+echo "Configuring UFW..."
+if chroot /mnt which ufw >/dev/null 2>&1; then
+    if chroot /mnt ufw allow 22/tcp && chroot /mnt ufw --force enable; then
+        echo "UFW enabled for SSH."
+    else
+        echo "UFW configuration failed (likely due to chroot/installer env); continuing..."
+    fi
+else
+    echo "UFW not installed; skipping firewall configuration."
+fi
 
 # Update initramfs and GRUB
 echo "Updating initramfs and GRUB..."
 chroot /mnt update-initramfs -u -k all
 chroot /mnt update-grub
 
-# Create golden baseline snapshot
+# Create golden baseline snapshot (non-fatal)
 echo "Creating golden baseline snapshot..."
-chroot /mnt snapper -c root create --description "Golden Baseline - Fresh Install $(date +%Y-%m-%d)" --cleanup-algorithm number
+if chroot /mnt snapper -c root create --description "Golden Baseline - Fresh Install $(date +%Y-%m-%d)" --cleanup-algorithm number; then
+    echo "Golden baseline snapshot created."
+else
+    echo "Golden baseline snapshot using snapper failed (likely D-Bus); you can create it later with snapshot-create."
+fi
 
 # Create MOTD
 cat > /mnt/etc/motd << 'MOTDEOF'
