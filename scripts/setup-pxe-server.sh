@@ -184,52 +184,71 @@ setup_tftp_structure() {
 }
 
 extract_netboot_files() {
-    log_step "Extracting netboot files from netinst ISO..."
+    log_step "Downloading official Debian netboot files..."
     
-    if [ ! -f "$SOURCE_ISO" ]; then
-        log_fail "Source ISO not found: $SOURCE_ISO"
-        log_error "Please ensure debian-12.12.0-amd64-netinst.iso is in $ISO_DIR"
+    # Official Debian netboot URL
+    local NETBOOT_URL="http://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/netboot/netboot.tar.gz"
+    local TEMP_DIR="/tmp/debian-netboot-$$"
+    
+    mkdir -p "$TEMP_DIR"
+    
+    # Download netboot.tar.gz
+    log_info "Downloading from: $NETBOOT_URL"
+    if ! wget -q --show-progress "$NETBOOT_URL" -O "$TEMP_DIR/netboot.tar.gz"; then
+        log_fail "Failed to download netboot.tar.gz"
+        log_error "Please check internet connection"
+        rm -rf "$TEMP_DIR"
         exit 1
     fi
-    log_success "Source ISO found"
+    log_success "Downloaded netboot.tar.gz"
     
-    # Mount ISO temporarily
-    local mount_point="/mnt/debian-iso-temp"
-    mkdir -p "$mount_point"
-    
-    if ! mount -o loop "$SOURCE_ISO" "$mount_point"; then
-        log_fail "Failed to mount ISO"
+    # Extract netboot files
+    log_info "Extracting netboot files..."
+    cd "$TEMP_DIR"
+    if ! tar -xzf netboot.tar.gz; then
+        log_fail "Failed to extract netboot.tar.gz"
+        rm -rf "$TEMP_DIR"
         exit 1
     fi
-    log_success "ISO mounted"
+    log_success "Extracted netboot files"
     
-    # Verify kernel and initrd exist in ISO
-    if [ ! -f "$mount_point/install.amd/vmlinuz" ]; then
-        log_fail "vmlinuz not found in ISO"
-        umount "$mount_point"
-        exit 1
-    fi
-    
-    if [ ! -f "$mount_point/install.amd/initrd.gz" ]; then
-        log_fail "initrd.gz not found in ISO"
-        umount "$mount_point"
+    # Verify extracted files exist
+    if [ ! -f "$TEMP_DIR/debian-installer/amd64/linux" ]; then
+        log_fail "Kernel (linux) not found in netboot archive"
+        rm -rf "$TEMP_DIR"
         exit 1
     fi
     
-    # Extract kernel and initrd from netinst ISO
-    cp "$mount_point/install.amd/vmlinuz" "$TFTP_ROOT/debian-installer/"
-    log_success "vmlinuz extracted"
+    if [ ! -f "$TEMP_DIR/debian-installer/amd64/initrd.gz" ]; then
+        log_fail "initrd.gz not found in netboot archive"
+        rm -rf "$TEMP_DIR"
+        exit 1
+    fi
     
-    cp "$mount_point/install.amd/initrd.gz" "$TFTP_ROOT/debian-installer/"
-    log_success "initrd.gz extracted"
+    # Copy netboot files to TFTP root
+    # Note: netboot uses 'linux' instead of 'vmlinuz'
+    cp "$TEMP_DIR/debian-installer/amd64/linux" "$TFTP_ROOT/debian-installer/vmlinuz"
+    log_success "Kernel copied (linux → vmlinuz)"
+    
+    cp "$TEMP_DIR/debian-installer/amd64/initrd.gz" "$TFTP_ROOT/debian-installer/initrd.gz"
+    log_success "initrd.gz copied"
     
     # Set ownership for TFTP files
     chown -R dnsmasq:nogroup "$TFTP_ROOT/debian-installer/"
     
-    umount "$mount_point"
-    rmdir "$mount_point"
+    # Verify file sizes
+    local INITRD_SIZE=$(stat -c%s "$TFTP_ROOT/debian-installer/initrd.gz")
+    if [ "$INITRD_SIZE" -lt 30000000 ]; then
+        log_warn "initrd.gz seems small ($INITRD_SIZE bytes)"
+        log_warn "Expected ~40MB for netboot initrd"
+    else
+        log_success "initrd.gz size verified: $(numfmt --to=iec-i --suffix=B $INITRD_SIZE)"
+    fi
     
-    # Verify extracted files
+    # Cleanup
+    rm -rf "$TEMP_DIR"
+    
+    # Verify final files
     if [ ! -f "$TFTP_ROOT/debian-installer/vmlinuz" ]; then
         log_fail "vmlinuz not in TFTP root"
         exit 1
@@ -240,8 +259,9 @@ extract_netboot_files() {
         exit 1
     fi
     
-    log_success "Netboot files extracted and verified"
-    log_info "Installation will use HTTP mirror (deb.debian.org)"
+    log_success "Official Debian netboot files installed"
+    log_info "✓ Pure network boot (NO CD-ROM detection code)"
+    log_info "✓ Installation will use HTTP mirror (deb.debian.org)"
 }
 
 configure_pxe_menu() {
@@ -534,7 +554,7 @@ print_summary() {
     echo "  Interface:    $NETWORK_INTERFACE"
     echo "  Server IP:    $SERVER_IP"
     echo "  Mode:         Proxy DHCP (Router provides IPs)"
-    echo "  ISO:          debian-12.12.0-amd64-netinst.iso"
+    echo "  Boot Files:   Official Debian netboot (pure network boot)"
     echo ""
     echo "Services Running:"
     echo "  TFTP:         $TFTP_ROOT (boot files)"
@@ -552,9 +572,11 @@ print_summary() {
     echo -e "         netcfg/get_hostname=debian-btrfs netcfg/get_domain=localdomain ---${NC}"
     echo ""
     echo "Installation Method:"
-    echo "  Type:         Network Installation (netinst)"
+    echo "  Type:         Pure Network Boot (netboot)"
+    echo "  Source:       Official Debian netboot.tar.gz"
     echo "  Mirror:       deb.debian.org (HTTP)"
     echo "  Packages:     Downloaded from internet during installation"
+    echo "  Advantage:    NO CD-ROM detection code (pure network boot)"
     echo ""
     echo "Client Boot Instructions:"
     echo "  1. Connect client machine to same network"

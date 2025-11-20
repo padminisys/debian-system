@@ -15,11 +15,14 @@ Complete automated installation system for Debian 12.12 with Btrfs filesystem, S
 ## 📋 Prerequisites
 
 - Debian-based system for building ISO/PXE server
-- **Debian 12.12 netinst ISO** (placed in [`iso/`](iso/) directory)
-  - Download: `debian-12.12.0-amd64-netinst.iso` (~400MB)
-  - For USB: Can also use DVD ISO (~4.7GB)
-- 8GB+ USB drive (for USB installation)
-- Network infrastructure with internet access (for PXE installation)
+- **For USB Installation:**
+  - Debian 12.12 netinst or DVD ISO (placed in [`iso/`](iso/) directory)
+  - Download: `debian-12.12.0-amd64-netinst.iso` (~400MB) or DVD (~4.7GB)
+  - 8GB+ USB drive
+- **For PXE Installation:**
+  - Internet connection (downloads official netboot files automatically)
+  - No ISO required - setup script downloads netboot.tar.gz directly
+  - Network infrastructure with internet access
 
 ## 🚀 Quick Start
 
@@ -43,7 +46,7 @@ sudo ./scripts/flash-usb.sh
 ### Option 2: PXE Network Installation
 
 ```bash
-# 1. Setup PXE server (uses netinst ISO)
+# 1. Setup PXE server (downloads official netboot files)
 sudo ./scripts/setup-pxe-server.sh
 
 # 2. Verify configuration (recommended)
@@ -54,16 +57,19 @@ sudo ./scripts/verify-pxe-config.sh
 # Installation completes automatically in 10-15 minutes
 ```
 
-**Note:** PXE installation requires internet connectivity to download packages from Debian mirrors.
+**Note:**
+- PXE setup automatically downloads official Debian netboot files (~40MB)
+- No ISO required - pure network boot installation
+- Client machine needs internet connectivity to download packages
 
-**Having Issues?** See [QUICK-FIX.md](QUICK-FIX.md) for complete reset and rebuild workflow.
+**Having Issues?** See [IMMEDIATE-FIX.md](IMMEDIATE-FIX.md) for CD-ROM detection error fix.
 
 ## 📁 Project Structure
 
 ```
 debian-system/
 ├── iso/                          # Source ISO location
-│   ├── debian-12.12.0-amd64-netinst.iso  # For PXE (required)
+│   ├── debian-12.12.0-amd64-netinst.iso  # For USB (optional)
 │   └── debian-12.12.0-amd64-DVD-1.iso    # For USB (optional)
 ├── preseed/                      # Preseed configurations
 │   ├── pxe/
@@ -72,7 +78,8 @@ debian-system/
 │       └── btrfs-automated.cfg   # ISO preseed
 ├── scripts/                      # Automation scripts
 │   ├── build-custom-iso.sh       # Build bootable ISO
-│   ├── setup-pxe-server.sh       # Setup PXE server (with validation)
+│   ├── setup-pxe-server.sh       # Setup PXE server (downloads netboot)
+│   ├── switch-to-netboot.sh      # Switch existing setup to netboot
 │   ├── reset-pxe-server.sh       # Complete PXE server reset
 │   ├── verify-pxe-config.sh      # Verify PXE configuration
 │   ├── flash-usb.sh              # Flash ISO to USB
@@ -251,7 +258,8 @@ sudo update-grub
 
 - **USB Boot**: 5-10 minutes (depends on hardware)
 - **PXE Boot**: 10-15 minutes (depends on internet speed)
-  - Uses netinst method: downloads packages during installation
+  - Uses official netboot files: pure network installation
+  - Downloads packages from deb.debian.org during installation
 
 ### Snapshot Operations
 
@@ -314,33 +322,35 @@ df -h
 
 **"Couldn't mount installation media" error:**
 
-This error occurs when the Debian installer tries to detect CD-ROM before network configuration.
+This error occurred in older versions when using netinst ISO extraction. **Now fixed automatically.**
 
-**🚨 IMMEDIATE FIX:** See [QUICK-FIX.md](QUICK-FIX.md)
+**Current Solution (v2.0):**
+- Setup script now downloads official Debian netboot files directly
+- No CD-ROM detection code in netboot files
+- Pure network boot installation
 
-**Complete Solution:**
+**If you have an existing setup with this error:**
 ```bash
-# 1. Complete reset
-sudo ./scripts/reset-pxe-server.sh
-
-# 2. Fresh setup with CD-ROM fix
-sudo ./scripts/setup-pxe-server.sh
-
-# 3. Verify configuration
-sudo ./scripts/verify-pxe-config.sh
+# Quick fix for existing installations
+sudo ./scripts/switch-to-netboot.sh
+sudo systemctl restart dnsmasq
 ```
 
-The setup script now **GUARANTEES** the CD-ROM detection fix (`hw-detect/load_media=false`) is applied and verified.
+**For fresh setup:**
+```bash
+# Just run setup - it now uses netboot automatically
+sudo ./scripts/setup-pxe-server.sh
+```
 
 **Detailed Documentation:**
-- [QUICK-FIX.md](QUICK-FIX.md) - Immediate 3-command solution
-- [docs/pxe-server-reset-guide.md](docs/pxe-server-reset-guide.md) - Complete guide with troubleshooting
+- [IMMEDIATE-FIX.md](IMMEDIATE-FIX.md) - Fix for existing setups
+- [docs/pxe-installation-media-fix.md](docs/pxe-installation-media-fix.md) - Technical details
 
 **Common Issues:**
-- CD-ROM detection not disabled (fixed by new scripts)
-- No internet connectivity on client machine
+- No internet connectivity on PXE server (needed to download netboot files)
+- No internet connectivity on client machine (needed to download packages)
 - Firewall blocking HTTP/TFTP ports
-- Services not running properly (verified by scripts)
+- Services not running properly
 
 ### Installation Hangs
 
@@ -410,10 +420,14 @@ This project is provided as-is for automated Debian installation with Btrfs.
 
 1. Client requests IP via DHCP
 2. DHCP server provides IP + boot file location
-3. Client downloads boot files via TFTP (kernel/initrd from netinst)
+3. Client downloads boot files via TFTP (official netboot kernel/initrd)
 4. Kernel boots and fetches preseed via HTTP
 5. Installer downloads packages from deb.debian.org
 6. Installation proceeds automatically
+
+**Key Difference from netinst:**
+- **Netboot**: Pure network boot (~40MB initrd, NO CD-ROM code)
+- **Netinst**: CD-ROM boot + network fallback (~22MB initrd, has CD-ROM detection)
 
 ## 🚀 Production Deployment
 
