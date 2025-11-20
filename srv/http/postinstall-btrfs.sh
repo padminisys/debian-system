@@ -126,7 +126,10 @@ EMPTY_PRE_POST_MIN_AGE="1800"
 SNAPEOF
 
 chroot /mnt chmod 750 /.snapshots
-chroot /mnt systemctl enable grub-btrfsd.service
+# Only enable grub-btrfsd if the service exists (for future use if you add it)
+if chroot /mnt systemctl list-unit-files | grep -q '^grub-btrfsd\.service'; then
+    chroot /mnt systemctl enable grub-btrfsd.service
+fi
 
 # Configure GRUB
 echo "Configuring GRUB..."
